@@ -1,0 +1,129 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import lightgbm as lgb
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import confusion_matrix as cm
+from sklearn.linear_model import LogisticRegression
+
+train = pd.read_csv('interview_dataset_train.xls', sep='\t')
+test = pd.read_csv('interview_dataset_test_no_tags.xls', sep='\t')
+
+###############################################################
+######################## Data Cleaning  #######################
+###############################################################
+
+print(train.info())
+# The following columns have missing values: #viewed_ads (763), age (783). both less than 0.1%
+print(test.info())
+# The following columns have missing values: #viewed_ads (233), age (214). both aproximately 1%
+
+sns.FacetGrid(data=train,hue='tag').map(sns.kdeplot, 'age', shade=True)
+plt.show()
+print(train.groupby('target_product_category').agg({'age':np.mean}))
+train.loc[train['age'].isnull(), 'age'] = train.groupby('target_product_category')['age'].transform('mean')
+test.loc[test['age'].isnull(), 'age'] = test.groupby('target_product_category')['age'].transform('mean')
+train.loc[train['#viewed_ads'].isnull(), '#viewed_ads'] = train.groupby('#products_in_cart')['#viewed_ads'].transform(
+    'mean')
+test.loc[test['#viewed_ads'].isnull(), '#viewed_ads'] = test.groupby('#products_in_cart')['#viewed_ads'].transform(
+    'mean')
+
+print(train.isnull().sum())
+    # We have no more nulls
+
+#####################################################
+######### Exploratory & Feature Engineering #########
+#####################################################
+
+# Not obligatory, but just for fun, let's cluster some features a lot of different values
+# The features will be: age, hour, target_product_price & #viewed_ads.
+cluster_df = pd.DataFrame(index=['age', 'hour', 'target_product_price', '#viewed_ads'], columns=['number_range', 'category_name'])
+cluster_df.loc['age'] = (19, 29, 34, 38, 64), ['youth', 'young_adults', 'adults', 'senior']
+cluster_df.loc['target_product_price'] = (20, 41, 51, 106, 496), ['cheap', 'normal', 'expensive', 'very_expensive']
+cluster_df.loc['hour'] = (0, 5, 11, 18, 24), ['dawn', 'morning', 'afternoon', 'evening']
+cluster_df.loc['#viewed_ads'] = (0, 9, 10, 11, 19), ['small_amount', 'medium_amount', 'large_amount', 'huge_amount']
+
+# a function to return the group name of each specific data
+def col_cat(value, df, col):
+    number_range = df.number_range.loc[col]
+    category_name = df.category_name.loc[col]
+    number_index = len([i for i in number_range if i <= value]) - 1
+    return category_name[number_index]
+# building new columns with the categories mentioned above
+for col in cluster_df.index:
+    new_col = '%s_cat'%col
+    train[new_col] = train[col].apply(col_cat, args=(cluster_df, col))
+    test[new_col] = test[col].apply(col_cat, args=(cluster_df, col))
+
+
+# one_hot the features while joining the train & test data frames.
+one_hot_encoded_training_predictors = pd.get_dummies(train)
+one_hot_encoded_test_predictors = pd.get_dummies(test)
+final_train, final_test = one_hot_encoded_training_predictors.align(one_hot_encoded_test_predictors,
+                                                                    join='left',
+                                                                    axis=1)
+print(final_train.shape)
+print(final_test.shape)
+
+# Let's check which features are valuable for our prediction according to the "importance" list.
+features = final_train.columns.tolist()
+features.remove('tag')
+label = 'tag'
+gbm = lgb.LGBMClassifier().fit(final_train[features], final_train[label])
+lgb.plot_importance(gbm)
+plt.show()
+import_val = [list(gbm.feature_importances_).index(imp) for imp in gbm.feature_importances_ if imp > np.max(gbm.feature_importances_)/3.0]
+import_feat = [features[j] for j in import_val]
+
+print(import_feat)
+
+##########################################################
+################### Machine Learning  ####################
+##########################################################
+
+# Splitting the data into train and validation sets
+learn_data, val_data = train_test_split(final_train, test_size=0.2)
+
+# Data columns to use
+base_features = import_feat
+label_name = 'tag'
+
+X_learn = learn_data[base_features].astype(float)
+y_learn = learn_data[label_name].astype(float)
+
+X_val = val_data[base_features].astype(float)
+y_val = val_data[label_name].astype(float)
+
+pred_dict = {'Random_Forest': RandomForestClassifier(n_estimators=500), 'Logistic_Regression': LogisticRegression(),
+             'lightgbm': lgb.LGBMClassifier()}
+pred_model = pd.DataFrame()
+for pred_name, pred_mode in pred_dict.items():
+    print(pred_name)
+    #checking accuracy according to CM to all models.
+    confusion_matrix_pred = cm(y_val, pred_mode.fit(X_learn, y_learn).predict(X_val))
+    # building the DataFrame of the Confusion Matrix
+    list1 = ["Actual 0", "Actual 1"]
+    list2 = ["Predicted 0", "Predicted 1"]
+    cfm_df = pd.DataFrame(confusion_matrix_pred, list1, list2)
+    print(pd.DataFrame(confusion_matrix_pred, list1, list2))
+
+    TP = cfm_df.iloc[0, 0]
+    TN = cfm_df.iloc[1, 1]
+    FP = cfm_df.iloc[0, 1]
+    FN = cfm_df.iloc[1, 0]
+
+    print('%s_model: '%pred_name + "The sensitivity or the TPR = TP / TP + FN : %f" % ((TP / (TP + FN)) * 100))
+    print('%s_model: '%pred_name + "The specificity or the TNR = TN / TN + FP : %f" % ((TN / (TN + FP)) * 100))
+    print('%s_model: '%pred_name + "The precision or positive predictive value aka PPV = TP / TP + FP : %f" % ((TP / (TP + FP)) * 100))
+    print('%s_model: '%pred_name + "The negative predictive value NPV = TN / TN + FN : %f" % ((TN / (TN + FN)) * 100))
+
+# if we decide to predict on the test set based on the best PPV then the winner is...... Random_Forest_model
+X_train = final_train[base_features].astype(float)
+y_train = final_train[label_name].astype(float)
+X_test = final_test[base_features].astype(float)
+
+pred_test = RandomForestClassifier(n_estimators=500).fit(X_train,y_train).predict(X_test)
+
+pd.DataFrame(pred_test, columns=['Random_Forest']).to_csv("paypal_18.10.csv")
