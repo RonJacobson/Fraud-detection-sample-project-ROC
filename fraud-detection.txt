@@ -8,8 +8,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix as cm
 from sklearn.linear_model import LogisticRegression
 
-train = pd.read_csv('interview_dataset_train.xls', sep='\t')
-test = pd.read_csv('interview_dataset_test_no_tags.xls', sep='\t')
+train = pd.read_csv('dataset_train.xls', sep='\t')
+test = pd.read_csv('dataset_test.xls', sep='\t')
 
 ###############################################################
 ######################## Data Cleaning  #######################
@@ -126,4 +126,4 @@ X_test = final_test[base_features].astype(float)
 
 pred_test = RandomForestClassifier(n_estimators=500).fit(X_train,y_train).predict(X_test)
 
-pd.DataFrame(pred_test, columns=['Random_Forest']).to_csv("paypal_18.10.csv")
+pd.DataFrame(pred_test, columns=['Random_Forest']).to_csv("Fraud.csv")
